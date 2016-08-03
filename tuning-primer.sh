@@ -18,8 +18,6 @@
 #									#
 #	Available Modes: 						#
 #		all : 		perform all checks (default)		#
-#		prompt : 	prompt for login credintials and socket	#
-#				and execution mode			#
 # 		mem, memory : 	run checks for tunable options which	#
 #				effect memory usage			#
 #		disk, file :	run checks for options which effect	#
@@ -29,13 +27,6 @@
 #				well Slow Queries, Binary logs,		#
 #				Used Connections and Worker Threads	#
 #########################################################################
-#									#
-# Set this socket variable ONLY if you have multiple instances running	# 
-# or we are unable to find your socket, and you don't want to to be	#
-# prompted for input each time you run this script.			#
-#									#
-#########################################################################
-socket=
 
 export black='\033[0m'
 export boldblack='\033[1;0m'
@@ -178,198 +169,32 @@ print_banner () {
 
 cecho "	-- MYSQL PERFORMANCE TUNING PRIMER --" boldblue
 cecho "	     - By: Matthew Montgomery -" black
+cecho "	     - Edited by: Brian Wiborg -" black
 
-}
-
-## -- Find the location of the mysql.sock file -- ##
-
-check_for_socket () {
-	if [ -z "$socket" ] ; then
-		# Use ~/my.cnf version
-		if [ -f ~/.my.cnf ] ; then
-			cnf_socket=$(grep ^socket ~/.my.cnf | awk -F \= '{ print $2 }' | head -1)
-		fi
-		if [ -S "$cnf_socket" ] ; then
-			socket=$cnf_socket
-		elif [ -S /var/lib/mysql/mysql.sock ] ; then
-			socket=/var/lib/mysql/mysql.sock
-		elif [ -S /var/run/mysqld/mysqld.sock ] ; then
-			socket=/var/run/mysqld/mysqld.sock
-		elif [ -S /tmp/mysql.sock ] ; then
-			socket=/tmp/mysql.sock
-		else
-			if [ -S "$ps_socket" ] ; then
-			socket=$ps_socket
-			fi
-		fi
-	fi
-	if [ -S "$socket" ] ; then
-		echo UP > /dev/null
-	else
-		cecho "No valid socket file \"$socket\" found!" boldred
-		cecho "The mysqld process is not running or it is installed in a custom location." red
-		cecho "If you are sure mysqld is running, execute script in \"prompt\" mode or set " red
-		cecho "the socket= variable at the top of this script" red
-		exit 1
-	fi
-}
-
-
-check_for_plesk_passwords () {
-
-## -- Check for the existance of plesk and login using it's credentials -- ##
-
-	if [ -f /etc/psa/.psa.shadow ] ; then
-	        mysql="mysql -S $socket -u admin -p$(cat /etc/psa/.psa.shadow)"
-	        mysqladmin="mysqladmin -S $socket -u admin -p$(cat /etc/psa/.psa.shadow)"
-	else
-	        mysql="mysql"
-	        mysqladmin="mysqladmin"
-	        # mysql="mysql -S $socket"
-	        # mysqladmin="mysqladmin -S $socket"
-	fi
 }
 
 check_mysql_login () {
 
 ## -- Test for running mysql -- ##
 
-	is_up=$($mysqladmin ping 2>&1)
+	is_up=$(mysqladmin ping 2>&1)
 	if [ "$is_up" = "mysqld is alive" ] ; then
-		echo UP > /dev/null
-	 	# echo $is_up
+                if $mysql -Bse "STATUS;" > /dev/null; then
+                    cecho "Using login values from ~/.my.cnf" 
+                    cecho "- LOGIN ATTEMPT FAILED -" boldred
+                    exit 1
+                fi
 	elif [ "$is_up" != "mysqld is alive" ] ; then
 		printf "\n"
-		cecho "Using login values from ~/.my.cnf" 
-		cecho "- INITIAL LOGIN ATTEMPT FAILED -" boldred
-		if [ -z $prompted ] ; then
-		find_webmin_passwords
-		else
-			return 1
-		fi
+		cecho "- CAN NOT CONNECT TO MYSQLD -" boldred
+                exit 1
 		
 	else 
-		cecho "Unknow exit status" red
+		cecho "Can not connect to mysqld!" red
 		exit -1
 	fi
-}
 
-final_login_attempt () {
-        is_up=$($mysqladmin ping 2>&1)
-        if [ "$is_up" = "mysqld is alive" ] ; then
-                echo UP > /dev/null
-        elif [ "$is_up" != "mysqld is alive" ] ; then
-                cecho "- FINAL LOGIN ATTEMPT FAILED -" boldred
-		cecho "Unable to log into socket: $socket" boldred
-                exit 1
-        fi
-}
-
-second_login_failed () {
-
-## -- create a ~/.my.cnf and exit when all else fails -- ##
-
-	cecho "Could not auto detect login info!"
-	cecho "Found potential sockets: $found_socks"
-	cecho "Using: $socket" red
-	read -p "Would you like to provide a different socket?: [y/N] " REPLY
-		case $REPLY in 
-			yes | y | Y | YES)
-			read -p "Socket: " socket
-			;;
-		esac
-	read -p "Do you have your login handy ? [y/N] : " REPLY
-	case $REPLY in 
-		yes | y | Y | YES)
-		answer1='yes'
-		read -p "User: " user
-		read -rp "Password: " pass
-		if [ -z $pass ] ; then
-		export mysql="$mysql -S$socket -u$user"
-		export mysqladmin="$mysqladmin -S$socket -u$user"
-		else
-		export mysql="$mysql -S$socket -u$user -p$pass"
-		export mysqladmin="$mysqladmin -S$socket -u$user -p$pass"
-		fi
-		;;
-		*)
-		cecho "Please create a valid login to MySQL"
-		cecho "Or, set correct values for  'user=' and 'password=' in ~/.my.cnf"
-		;;
-	esac
-	cecho " "
-	read -p "Would you like me to create a ~/.my.cnf file for you? [y/N] : " REPLY
-        case $REPLY in
-	        yes | y | Y | YES)
-		answer2='yes'
-		if [ ! -f ~/.my.cnf ] ; then
-			umask 077
-			printf "[client]\nuser=$user\npassword=$pass\nsocket=$socket" > ~/.my.cnf
-			if [ "$answer1" != 'yes' ] ; then
-				exit 1
-			else
-				final_login_attempt
-				return 0
-			fi
-		else
-			printf "\n"
-			cecho "~/.my.cnf already exists!" boldred
-			printf "\n"
-			read -p "Replace ? [y/N] : " REPLY
-			if [ "$REPLY" = 'y' ] || [ "$REPLY" = 'Y' ] ; then 
-			printf "[client]\nuser=$user\npassword=$pass\socket=$socket" > ~/.my.cnf
-				if [ "$answer1" != 'yes' ] ; then
-					exit 1
-				else
-					final_login_attempt
-					return 0
-				fi
-			else
-				cecho "Please set the 'user=' and 'password=' and 'socket=' values in ~/.my.cnf"
-				exit 1
-			fi
-		fi
-		;;
-		*)
-		if [ "$answer1" != 'yes' ] ; then
-			exit 1
-		else
-			final_login_attempt
-			return 0
-		fi
-		;;
-	esac
-}
-
-find_webmin_passwords () {
-
-## -- populate the .my.cnf file using values harvested from Webmin -- ##
-
-	cecho "Testing for stored webmin passwords:"
-	if [ -f /etc/webmin/mysql/config ] ; then
-		user=$(grep ^login= /etc/webmin/mysql/config | cut -d "=" -f 2)
-		pass=$(grep ^pass= /etc/webmin/mysql/config | cut -d "=" -f 2)
-		if [  $user ] && [ $pass ] && [ ! -f ~/.my.cnf  ] ; then
-			cecho "Setting login info as User: $user Password: $pass"
-			touch ~/.my.cnf
-			chmod 600 ~/.my.cnf
-			printf "[client]\nuser=$user\npassword=$pass" > ~/.my.cnf 
-			cecho "Retrying login"
-			is_up=$($mysqladmin ping 2>&1)
-			if [ "$is_up" = "mysqld is alive"  ] ; then
-				echo UP > /dev/null
-			else
-				second_login_failed
-			fi
-		echo
-		else
-			second_login_failed
-		echo
-		fi
-	else
-	cecho " None Found" boldred
-		second_login_failed
-	fi
+        export mysql="mysql"
 }
 
 #########################################################################
@@ -1088,14 +913,6 @@ check_table_cache () {
  
 	table_count=$($mysql -Bse "/*!50000 SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE='BASE TABLE' */")
 
-	if [ -z "$table_count" ] ; then
-		if [ "$UID" != "$socket_owner" ] && [ "$UID" != "0" ] ; then
-			cecho "You are not '$socket_owner' or 'root'" red
-			cecho "I am unable to determine the table_count!" red
-		else
-			table_count=$(find $datadir 2>&1 | grep -c .frm$)
-		fi
-	fi
 	if [ $table_open_cache ] ; then
 		table_cache=$table_open_cache
 	fi
@@ -1432,8 +1249,6 @@ total_memory_used () {
 ## Required Functions  ## 
 
 login_validation () {
-	check_for_socket 		# determine the socket location -- 1st login
-	check_for_plesk_passwords	# determine the login method -- 2nd login
 	check_mysql_login		# determine if mysql is accepting login -- 3rd login
 	export major_version=$($mysql -Bse "SELECT SUBSTRING_INDEX(VERSION(), '.', +2)")
 #	export mysql_version_num=$($mysql -Bse "SELECT LEFT(REPLACE(SUBSTRING_INDEX(VERSION(), '-', +1), '.', ''),4)" )
@@ -1531,61 +1346,6 @@ all () {
 	file
 }
 
-prompt () {
-	prompted='true'
-	read -p "Username [anonymous] : " user
-	read -rp "Password [<none>] : " pass
-	cecho " "
-	read -p "Socket [ /var/lib/mysql/mysql.sock ] : " socket
-	if [ -z $socket ] ; then
-		export socket='/var/lib/mysql/mysql.sock'
-	fi
-
-	if [ -z $pass ] ; then
-	export mysql="mysql -S $socket -u$user"
-	export mysqladmin="mysqladmin -S $socket -u$user"
-	else
-        export mysql="mysql -S $socket -u$user -p$pass"
-        export mysqladmin="mysqladmin -S $socket -u$user -p$pass"
-	fi
-
-	check_for_socket
-	check_mysql_login
-
-	if [ $? = 1 ] ; then
-		exit 1
-	fi
-	read -p "Mode to test - banner, file, misc, mem, innodb, [all] : " REPLY
-	if [ -z $REPLY ] ; then
-		REPLY='all'
-	fi
-	case $REPLY in
-	        banner | BANNER | header | HEADER | head | HEAD)
-		banner_info 
-		;;
-		misc | MISC | miscelaneous )
-		misc
-		;;
-        	mem | memory |  MEM | MEMORY )
-		memory
-		;; 
-		file | FILE | disk | DISK )
-		file
-		;;
-		innodb | INNODB )
-		innodb
-		;;
-		all | ALL )
-		cecho " "
-		all
-		;;
-		* )
-		cecho "Invalid Mode!  Valid options are 'banner', 'misc', 'memory', 'file', 'innodb' or 'all'" boldred
-		exit 1
-		;;
-	esac 
-}
-
 ## Address environmental differences ##
 get_system_info
 # echo $ps_socket
@@ -1593,11 +1353,6 @@ get_system_info
 if [ -z "$1" ] ; then
 	login_validation
 	mode='ALL'
-elif [ "$1" = "prompt" ] || [ "$1" = "PROMPT" ] ; then
-	mode=$1
-elif [ "$1" != "prompt" ] || [ "$1" != "PROMPT" ] ; then
-	login_validation
-	mode=$1
 fi
 
 case $mode in 
@@ -1624,11 +1379,8 @@ case $mode in
 	banner_info
 	check_innodb_status ; echo
 	;;
-	prompt | PROMPT )
-	prompt
-	;;
 	*)
-	cecho "usage: $0 [ all | banner | file | innodb | memory | misc | prompt ]" boldred
+	cecho "usage: $0 [ all | banner | file | innodb | memory | misc ]" boldred
 	exit 1  
 	;;
 esac
